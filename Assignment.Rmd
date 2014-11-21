@@ -1,0 +1,236 @@
+---
+title: "Practical Machine Learning - Prediction Assignment Writeup"
+output: html_document
+geometry: margin=1.5cm
+---
+
+### 1. SUMMARY
+
+Devices such as Jawbone Up, Nike FuelBand, and Fitbit make possible to collect a large amount of data about personal activity relatively inexpensively.
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+The provided dataset contained data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly, in 5 different ways.
+
+* Training data source : https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+* Test data source : https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+* Project source : http://groupware.les.inf.puc-rio.br/har
+
+In this assignment, the goal was to build a model to accurately predict the manner in which people did their exercises. To accomplish this task, it was used random forests method and the `bigrf` package.
+
+The overall prediction accuracy was approximately **99.3%**, which was a good and encouraging result. As reference, the accuracy achieved by in the original paper which used the proposed data set was **98.2%**. The out of sample error in the prediction was low, in the order of **0.726%**.
+
+
+### 2. DOWNLOADING THE DATA AND LOADING INTO R
+```{r,echo=TRUE,cache=TRUE,tidy=TRUE}
+setwd('/Volumes/Documentos importantes/Coursera/8 - Practical Machine Learning/Quizzes and Project')
+download.file('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv',destfile='pml-training.csv',method='curl')
+download.file('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv',destfile='pml-testing.csv',method='curl')
+train<-read.csv('pml-training.csv',header=T,na.strings=c("NA","#DIV/0!",""))
+test<-read.csv('pml-testing.csv',header=T,na.strings=c("NA","#DIV/0!",""))
+```
+
+### 3. PARTITIONING THE TRAINING DATA SET
+
+The training data set (object *train*) was partitioned in two data sets :
+
+* 60% for algorithm development (*train2* object).
+* 40% for algorithm testing before application to test dataset and out of sample error estimation(*test2* object).
+
+```{r,echo=TRUE,cache=TRUE}
+if("caret" %in% rownames(installed.packages()) == FALSE) {install.packages("caret")}
+library(caret)
+set.seed(1)
+split <- createDataPartition(y=train$classe, p=0.6, list=FALSE)
+train2 <- train[split, ]; test2 <- train[-split, ]
+dim(train2); dim(test2)
+```
+
+### 4. CLEANING AND CHECKING THE DATA SETS
+
+The classification of the types of exercises should be performed based on the right variables, such as data from sensors on the belt, forearm, arm, and dumbell. Additionally, the result of the prediction should accurately classify the types of exercises as **correctly performed** (class A) or **performed incorrectly** (classes B, C, D, and E).
+
+The mentioned variables follow the presented name patterns :
+
+- gyros_xxx_x, gyros_xxx_y, gyros_xxx_z
+- accel_xxx_x, accel_xxx_y, accel_xxx_z
+- total_accel_xxx
+- magnet_xxx_x, magnet_xxx_y, magnet_xxx_z
+- roll_xxx
+- pitch_xxx
+- yaw_xxx
+
+So, the predictiors were extrated using : 
+
+```{r,echo=TRUE,cache=TRUE,tidy=TRUE}
+preds <- c(grep("^accel", names(train)), grep("^gyros", names(train)), grep("^magnet", names(train)), grep("^roll", names(train)), grep("^pitch", names(train)), grep("^yaw", names(train)), grep("^total", names(train)), grep("classe", names(train)))
+train2_pred<-train2[, preds]
+test2_pred<-test2[, preds]
+```
+
+It was possible to confirm that the remaining predictors were actually suitable, using the `nearZeroVar` function from Caret package. No remaining variable has variance close to zero :
+
+```{r,echo=TRUE,cache=TRUE}
+nzv_train2<-nearZeroVar(train2_pred,saveMetrics=T)
+nzv_test2<-nearZeroVar(test2_pred,saveMetrics=T)
+nzv_train2; nzv_test2
+```
+
+Finally, it was checked if NAs remained in the data sets :
+
+```{r,echo=TRUE,cache=TRUE}
+sum(is.na(train2_pred)); sum(is.na(test2_pred))
+```
+
+As both values were zeros, it was possible to conclude that no NAs remained in the data sets.
+
+### 4. USING RANDOM FORRESTS
+
+### 4.1. Using Caret package
+
+The prediction model which was first tried used the Caret package and the **random forrests** method. However, due to the size of the `train2_pred` data frame (almost 12,000 entries), the processing time reached several minutes. According to the original paper, using random forrests, a weighted accuracy of 98.2% was achieved.
+
+For this reason, an alternative method for running random forrests was tried, aiming to achieve a satisfactory accuracy.
+
+### 4.2. Using 'bigrf' package
+
+After a fast research at Google, the `bigrf` package was reverted as a faster option to traditional random forest in Caret package. the `bigrf` package is an implementation of Leo Breiman's and Adele Cutler's Random Forest algorithms for classification and regression, with optimizations for performance and for handling of data sets that are too large to be processed in memory. 
+
+* Package source : https://github.com/aloysius-lim/bigrf
+
+Additionally, parallel processing using multicore features in `doParallel` package helped to enhance the overall computation speed.
+
+The `bigrf` package could build the prediction model (using random forests method) and classification in few seconds.
+
+### 4.3. Building the prediction model and applying to training set
+
+The first step was the installation of the new package :
+
+```{r,echo=TRUE,cache=TRUE}
+if("bigrf" %in% rownames(installed.packages()) == FALSE) {install.packages("bigrf")}
+library(bigrf)
+```
+
+Later, the parallel/multicore processing was activated :
+
+```{r,echo=TRUE,cache=TRUE,tidy=TRUE}
+if("doParallel" %in% rownames(installed.packages()) == FALSE) {install.packages("doParallel")}
+library(doParallel)
+registerDoParallel(cores=detectCores(all.tests=TRUE))
+```
+
+So, the function `bigrfc` was used to build the classification model based in the random forests method :
+
+```{r,echo=TRUE,cache=TRUE}
+set.seed(1)
+fit<-bigrfc(train2_pred, train2_pred$classe,varselect = 1:52)
+```
+
+Fifty (50) random forests were performed, in order to reduce the Out-Of-Bag (OOB) classification error to a minimum value.
+
+The function `predict` was used to predict the classes of the same training set used to build the model :
+
+```{r,echo=TRUE,cache=TRUE}
+pred<-predict(fit, train2_pred, train2_pred$classe)
+```
+
+The error rates and confusion matrix can be verified :
+
+```{r,cache=TRUE,cache=TRUE}
+summary(pred)
+```
+
+It was possible to verify that the built model scored **100%** accuracy of prediction in all classes, and **0.00%** overall error, in the training data set.
+
+### 4.4. Testing prediction model using cross-validation
+
+In despite of the built model showing good results in the prediction of training data set, an additional and important test was to apply the same model to a new data set. For this purpose, the `test2_pred` data set was used :
+
+```{r,echo=TRUE,cache=TRUE}
+pred2<-predict(fit, test2_pred, test2_pred$classe)
+```
+
+Finnaly, the error rates can be verified and a confusion matrix could be built, to compare the actual values to its predicted values :
+```{r,echo=TRUE,cache=TRUE}
+summary(pred2)
+```
+
+The out of sample error rate in the classification was **0.726%**, which can be considered low.
+
+The accuracy of the model applied to `test2_pred` was :
+
+```{r,echo=FALSE,cache=TRUE,results='hide'}
+pred4<-predict(fit, test2_pred, test2_pred$classe)
+pred4<-replace(pred4, pred2==1, "A")
+pred4<-replace(pred4, pred2==2, "B")
+pred4<-replace(pred4, pred2==3, "C")
+pred4<-replace(pred4, pred2==4, "D")
+pred4<-replace(pred4, pred2==5, "E")
+x<-table(test2_pred$classe, pred4,dnn=c('real','prediction'))
+```
+
+```{r,echo=FALSE,cache=TRUE,results='hide'}
+a<-(x[1,1]*100)/(rowSums(x)[1])
+aa<-round(a,1)
+```
+* Class A : `r aa`%
+```{r,echo=FALSE,cache=TRUE,results='hide'}
+b<-(x[2,2]*100)/(rowSums(x)[2])
+bb<-round(b,1)
+```
+* Class B : `r bb`%
+```{r,echo=FALSE,cache=TRUE,results='hide'}
+c<-(x[3,3]*100)/(rowSums(x)[3])
+cc<-round(c,1)
+```
+* Class C : `r cc`%
+```{r,echo=FALSE,cache=TRUE,results='hide'}
+d<-(x[4,4]*100)/(rowSums(x)[4])
+dd<-round(d,1)
+```
+* Class D : `r dd`%
+```{r,echo=FALSE,cache=TRUE,results='hide'}
+e<-(x[5,5]*100)/(rowSums(x)[5])
+ee<-round(e,1)
+```
+* Class E : `r ee`%
+
+```{r,echo=FALSE,cache=TRUE,results='hide'}
+o<-(x[1,1]+x[2,2]+x[3,3]+x[4,4]+x[5,5])*100/sum(x)
+oo<-round(o,1)
+```
+* **Overall accuracy : `r oo`%**
+
+The overall accuracy of **`r oo`%** was considered to be suitable, and for this reason, the built model was accepted to the next step.
+
+### 4.5. Applying the prediction model to test set
+
+Finnaly, the built prediction model was applied to the `test` data set.
+
+```{r,echo=TRUE,cache=TRUE}
+test_pred<-test[, preds]
+pred3<-predict(fit, test_pred)
+pred3<-replace(pred3, pred3==1, "A")
+pred3<-replace(pred3, pred3==2, "B")
+pred3<-replace(pred3, pred3==3, "C")
+pred3<-replace(pred3, pred3==4, "D")
+pred3<-replace(pred3, pred3==5, "E")
+```
+
+The predicted classes were :
+
+```{r,echo=TRUE,cache=TRUE}
+as.data.frame(pred3)
+```
+
+### 5. CONCLUSION
+
+The random forrests method is, indeed, very accurate in classification procedures. The computing time may become an issue when the data set is large. Fortunatelly, there are options to make this process faster, keeping its accuracy in a high level.
+
+The predicted classes for `test` data set were all correct according to project submission system, which confirms the high accuracy of the proposed process.
+
+It was possible to achieve a better accuracy than obtained in the original paper. As seen in item 4.4, the overall accuracy was approximately **`r oo`%**, against **98.2%** of the original paper.
+
+The out of sample error was low, only **0.726%**.
+
+Finally, the parallel computation using multicore features of modern processors is a very relevant procedure for larger scale computations.
